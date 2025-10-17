@@ -144,7 +144,7 @@ def get_neighbor_indices_ase(i, atoms, cutoff='default', skin=0.25):
         indices = list(set(indices))
         return 0, indices
     else:
-        print("Atom {} with index {} does not have a neighbor".format(pob[i], i))
+        print("Atom {} with index {} does not have a neighbor".format(atoms[i], i))
         return 1, indices
 
 def get_second_nearest_neighbors(neighbor_dict):
@@ -286,7 +286,7 @@ def get_features_cif(path_to_cif):
             if code == 1:
                 code, neighbor_dict[i] = get_neighbor_indices_ase(i, atoms)
                 if code == 1:
-                    print("Found no neighbor for atom {}".format(atoms[k]))
+                    print("Found no neighbor for atom {}".format(atoms[i]))
                     check_neighbor == False
                     break
 
@@ -295,15 +295,17 @@ def get_features_cif(path_to_cif):
             code, neighbor_dict[i] = get_neighbor_indices_ase(i, atoms)
             if code == 1:
                 print("Found no neighbor for atom {}".format(atoms[k]))
-                check_neighbor == False
+                check_neighbor = False
                 break
 
     if check_neighbor == False:
         print("Cannot featurize MOF {} because of missing neighbors".format(path_to_cif))
         return 1
-
-    neighbor_dict = revise_nn(atoms,neighbor_dict)
-    snn_dict = get_second_nearest_neighbors(neighbor_dict)
+    try:
+        neighbor_dict = revise_nn(atoms,neighbor_dict)
+        snn_dict = get_second_nearest_neighbors(neighbor_dict)
+    except Exception as e:
+        return 1
     for k in snn_dict:
         if len(snn_dict[k]) == 0:
             check_snn = False
