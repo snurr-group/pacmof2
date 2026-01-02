@@ -51,8 +51,7 @@ wget -P pacmof2/models/ https://zenodo.org/records/12747095/files/PACMOF2_neutra
 After setting up the dependencies and downloading the models, install PACMOF2:
 
 ```bash
-python3 -m build
-pip install .
+pip install -e .
 ```
 
 ## Usage
