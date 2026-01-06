@@ -35,17 +35,20 @@ pip install -r requirements.txt
 ```
 
 ### Downloading the Models
-Due to file size limitations on GitHub, the PACMOF2 models are stored on Zenodo. Download the models and place them in the `pacmof2/models/` directory:
-
-- [PACMOF2_ionic.gz](https://zenodo.org/records/12747095/files/PACMOF2_ionic.gz)
-- [PACMOF2_neutral.gz](https://zenodo.org/records/12747095/files/PACMOF2_neutral.gz)
-
-Or use `wget` to download the models:
+PACMOF2 models are available on HuggingFace and Zeondo. Download the models and store them under pacmof2/models/ directory:
 
 ```bash
+wget -P pacmof2/models/ https://huggingface.co/tdphamm/PACMOF2/resolve/main/PACMOF2_ionic.gz
+wget -P pacmof2/models/ https://huggingface.co/tdphamm/PACMOF2/resolve/main/PACMOF2_neutral.gz
+```
+OR
+
+```bash
+# From Zenodo
 wget -P pacmof2/models/ https://zenodo.org/records/12747095/files/PACMOF2_ionic.gz
 wget -P pacmof2/models/ https://zenodo.org/records/12747095/files/PACMOF2_neutral.gz
 ```
+
 
 ### Installing PACMOF2
 After setting up the dependencies and downloading the models, install PACMOF2:
