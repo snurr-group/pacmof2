@@ -35,7 +35,7 @@ pip install -r requirements.txt
 ```
 
 ### Downloading the Models
-PACMOF2 models are available on HuggingFace and Zeondo. Download the models and store them under pacmof2/models/ directory:
+PACMOF2 models are available on HuggingFace and Zenodo. Download the models and store them under pacmof2/models/ directory:
 
 ```bash
 wget -P pacmof2/models/ https://huggingface.co/tdphamm/PACMOF2/resolve/main/PACMOF2_ionic.gz
@@ -58,52 +58,62 @@ pip install -e .
 ```
 
 ## Usage
-PACMOF2 can predict partial atomic charges for both neutral and ionic MOFs. Example scripts and CIF files for using PACMOF2 are shown in examples/.
+PACMOF2 can predict partial atomic charges for both neutral and ionic MOFs. It can be used either as a command-line tool or as a Python library. Example scripts and CIF files are available in the `examples/` directory.
 
-### Predicting Charges for Neutral MOFs
-To predict charges for a single neutral MOF:
+### Command-Line Interface
 
-```python
-from pacmof2 import pacmof2
+After installation, the `pacmof2` command is available:
 
-path_to_cif = 'path/to/cif'
-output_path = 'pacmof'
-pacmof2.get_charges(path_to_cif, output_path, identifier="_pacmof")
+```bash
+# Single neutral MOF
+pacmof2 path/to/file.cif -o output_dir/
+
+# Multiple neutral MOFs in a directory
+pacmof2 path/to/cifs/ -o output_dir/ --multiple
+
+# Single ionic MOF with known net charge
+pacmof2 path/to/file.cif -o output_dir/ --net-charge -2
+
+# Multiple ionic MOFs with net charges from a JSON file
+pacmof2 path/to/cifs/ -o output_dir/ --multiple --net-charges net_charges.json
+
+# Show all options
+pacmof2 --help
 ```
 
-To predict charges for multiple neutral MOFs in a folder:
+### Python API
+
+#### Predicting Charges for Neutral MOFs
 
 ```python
-from pacmof2 import pacmof2
+from pacmof2 import get_charges
 
-path_to_cif = 'path/to/cifs/folder/'
-output_path = 'pacmof'
-pacmof2.get_charges(path_to_cif, output_path, identifier='_pacmof', multiple_cifs=True)
+# Single CIF
+get_charges('path/to/file.cif', 'output_dir/', identifier="_pacmof")
+
+# Multiple CIFs in a folder
+get_charges('path/to/cifs/', 'output_dir/', identifier='_pacmof', multiple_cifs=True)
 ```
 
-### Predicting Charges for Ionic MOFs
-For a single ionic MOF:
+#### Predicting Charges for Ionic MOFs
 
 ```python
-from pacmof2 import pacmof2
+from pacmof2 import get_charges
 
-path_to_cif = 'path/to/cif'
-output_path = 'pacmof'
-pacmof2.get_charges(path_to_cif, output_path, identifier='_pacmof', net_charge=-2)
+# Single ionic MOF
+get_charges('path/to/file.cif', 'output_dir/', identifier='_pacmof', net_charge=-2)
 ```
 
 For multiple ionic MOFs with net charges specified in a JSON file:
 
 ```python
-from pacmof2 import pacmof2
+from pacmof2 import get_charges
 import json
 
-path_to_cif = 'path/to/cifs/folder'
-output_path = 'pacmof'
 with open('net_charges.json', 'r') as f:
     net_charges = json.load(f)
 
-pacmof2.get_charges(path_to_cif, output_path, identifier='_pacmof', multiple_cifs=True, net_charge=net_charges)
+get_charges('path/to/cifs/', 'output_dir/', identifier='_pacmof', multiple_cifs=True, net_charge=net_charges)
 ```
 
 ## Reference

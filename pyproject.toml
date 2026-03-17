@@ -11,9 +11,10 @@ authors = [
 dependencies = [
     "ase>=3.22.1",
     "pymatgen>=2023.10.4",
-    "scikit-learn==1.3.2"
+    "scikit-learn==1.3.2",
+    "tqdm>=4.15",
 ]
-description = "A small example package"
+description = "Predicting partial atomic charges in Metal-Organic Frameworks with DFT-level accuracy"
 readme = "README.md"
 requires-python = ">=3.9"
 classifiers = [
@@ -21,6 +22,10 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
+
+[project.scripts]
+pacmof2 = "pacmof2.cli:main"
+
 [tool.setuptools]
 include-package-data = true
 

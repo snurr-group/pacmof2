@@ -1,34 +1,64 @@
-import os
-import joblib
-from importlib.resources import files
-from tqdm import tqdm
+"""Core module for PACMOF2 charge prediction."""
+
 import glob
+import logging
+import os
+from importlib.resources import files
+from typing import Optional, Union
+
+import joblib
 import numpy as np
-
-
-from ase.io import read
 from ase import neighborlist
-
+from ase.io import read
 from pymatgen.analysis.local_env import CrystalNN
 from pymatgen.io.ase import AseAtomsAdaptor
+from tqdm import tqdm
+
 from pacmof2.data import electronegativity, first_ip, metals
 from . import models
 
+logger = logging.getLogger(__name__)
 
-def load_models():
-    # 'files(models)' returns a Traversable object that acts like a pathlib.Path
+
+def load_models() -> tuple:
+    """Load the pre-trained neutral and ionic charge prediction models.
+
+    Returns
+    -------
+    tuple
+        A tuple of (neutral_model, ionic_model) scikit-learn estimators.
+    """
     neutral_path = files(models) / "PACMOF2_neutral.gz"
     ionic_path = files(models) / "PACMOF2_ionic.gz"
 
-    # joblib.load accepts Path objects directly
     neutral_model = joblib.load(neutral_path)
     ionic_model = joblib.load(ionic_path)
 
     return neutral_model, ionic_model
 
 
-def get_neighbor_indices_pm(i, pob, cnn):
-    """Get indices using Pymatgen. Returns list or raises ValueError."""
+def get_neighbor_indices_pm(i: int, pob, cnn: CrystalNN) -> list[int]:
+    """Get nearest neighbor indices for atom i using Pymatgen's CrystalNN.
+
+    Parameters
+    ----------
+    i : int
+        Index of the center atom.
+    pob : pymatgen.core.Structure
+        Pymatgen structure object.
+    cnn : CrystalNN
+        CrystalNN instance for neighbor detection.
+
+    Returns
+    -------
+    list[int]
+        List of neighbor atom indices.
+
+    Raises
+    ------
+    ValueError
+        If no neighbors are found.
+    """
     nn_data = cnn.get_nn_data(pob, i)
     nn_info = nn_data.all_nninfo
     indices = {item["site_index"] for item in nn_info}
@@ -37,15 +67,46 @@ def get_neighbor_indices_pm(i, pob, cnn):
     return list(indices)
 
 
-def get_neighbor_indices_ase(i, atoms, cutoff=None, skin=0.25):
-    """Get indices using ASE. Returns list or raises ValueError."""
-    if cutoff is None:
-        cutoff = neighborlist.natural_cutoffs(atoms)
+def get_neighbor_indices_ase(
+    i: int,
+    atoms,
+    nl: Optional[neighborlist.NeighborList] = None,
+    cutoff=None,
+    skin: float = 0.25,
+) -> list[int]:
+    """Get nearest neighbor indices for atom i using ASE's NeighborList.
 
-    nl = neighborlist.NeighborList(
-        cutoff, skin=skin, self_interaction=False, bothways=True
-    )
-    nl.update(atoms)
+    Parameters
+    ----------
+    i : int
+        Index of the center atom.
+    atoms : ase.Atoms
+        ASE Atoms object.
+    nl : NeighborList, optional
+        Pre-built neighbor list. If None, one is constructed.
+    cutoff : list or None
+        Per-element cutoff radii. If None, natural cutoffs are used.
+    skin : float
+        Skin distance for neighbor list construction.
+
+    Returns
+    -------
+    list[int]
+        List of neighbor atom indices.
+
+    Raises
+    ------
+    ValueError
+        If no neighbors are found.
+    """
+    if nl is None:
+        if cutoff is None:
+            cutoff = neighborlist.natural_cutoffs(atoms)
+        nl = neighborlist.NeighborList(
+            cutoff, skin=skin, self_interaction=False, bothways=True
+        )
+        nl.update(atoms)
+
     indices = nl.get_neighbors(i)[0].tolist()
 
     if not indices:
@@ -53,16 +114,40 @@ def get_neighbor_indices_ase(i, atoms, cutoff=None, skin=0.25):
     return list(set(indices))
 
 
-def get_neighbors_hybrid(atoms, pob, cnn):
-    """Try Pymatgen first, failover to ASE."""
+def get_neighbors_hybrid(atoms, pob, cnn: CrystalNN) -> dict[int, list[int]]:
+    """Build a neighbor dictionary using Pymatgen with ASE fallback.
+
+    Tries Pymatgen's CrystalNN first for each atom. If that fails,
+    falls back to ASE's NeighborList.
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+        ASE Atoms object.
+    pob : pymatgen.core.Structure
+        Pymatgen structure object.
+    cnn : CrystalNN
+        CrystalNN instance.
+
+    Returns
+    -------
+    dict[int, list[int]]
+        Mapping from atom index to list of nearest neighbor indices.
+    """
     neighbor_dict = {}
+    # Pre-build ASE neighbor list once for fallback use
+    cutoff = neighborlist.natural_cutoffs(atoms)
+    ase_nl = neighborlist.NeighborList(
+        cutoff, skin=0.25, self_interaction=False, bothways=True
+    )
+    ase_nl.update(atoms)
+
     for i in range(len(atoms)):
         try:
             neighbor_dict[i] = get_neighbor_indices_pm(i, pob, cnn)
         except (ValueError, Exception):
-            # Fallback to ASE
             try:
-                neighbor_dict[i] = get_neighbor_indices_ase(i, atoms)
+                neighbor_dict[i] = get_neighbor_indices_ase(i, atoms, nl=ase_nl)
             except ValueError:
                 raise ValueError(
                     f"Atom {i} has no neighbors in both Pymatgen and ASE methods."
@@ -70,14 +155,26 @@ def get_neighbors_hybrid(atoms, pob, cnn):
     return neighbor_dict
 
 
-def get_second_nearest_neighbors(neighbor_dict):
-    """Optimized SNN search using sets."""
+def get_second_nearest_neighbors(
+    neighbor_dict: dict[int, list[int]],
+) -> dict[int, list[int]]:
+    """Compute second-nearest neighbors from a neighbor dictionary.
+
+    Parameters
+    ----------
+    neighbor_dict : dict[int, list[int]]
+        Mapping from atom index to nearest neighbor indices.
+
+    Returns
+    -------
+    dict[int, list[int]]
+        Mapping from atom index to second-nearest neighbor indices.
+    """
     snn_dict = {}
     for k, neighbors in neighbor_dict.items():
         neighbors_set = set(neighbors)
         snn = set()
         for n in neighbors:
-            # Add neighbors of neighbors
             candidates = neighbor_dict.get(n, [])
             for candidate in candidates:
                 if candidate != k and candidate not in neighbors_set:
@@ -86,61 +183,80 @@ def get_second_nearest_neighbors(neighbor_dict):
     return snn_dict
 
 
-def revise_nn(atoms, neighbor_dict):
-    """
-    Revise neighbor_dict to remove atoms that are in both nearest neighbor
-    and second nearest neighbors.
+def revise_nn(atoms, neighbor_dict: dict[int, list[int]]) -> dict[int, list[int]]:
+    """Revise neighbor dict using chemistry-aware heuristics.
 
-    Logic restored:
-    - For Carbon: If C connects to O, and O connects to Metal... ensure C does NOT connect to Metal directly.
-    - For Metal: If Metal connects to O, and O connects to C... ensure Metal does NOT connect to C directly.
+    Removes direct Carbon-Metal bonds when mediated by Oxygen
+    (e.g., in carboxylate groups where C-O-Metal is the correct
+    connectivity, not C-Metal).
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+        ASE Atoms object.
+    neighbor_dict : dict[int, list[int]]
+        Neighbor dictionary to revise in place.
+
+    Returns
+    -------
+    dict[int, list[int]]
+        Revised neighbor dictionary.
     """
     chem_symb = atoms.get_chemical_symbols()
 
-    # We must iterate over keys, but modify the lists in place safely.
     for k in neighbor_dict:
         element_k = chem_symb[k]
         neighbors = neighbor_dict[k]
-
-        # We collect items to remove in a set to avoid index shifting issues during iteration
         to_remove = set()
 
-        # --- Carbon Logic ---
+        # Carbon logic: remove direct C-Metal bond if O mediates
         if element_k == "C":
             for i in neighbors:
-                # i is the potential Oxygen neighbor
                 if chem_symb[i] == "O":
-                    # Check Oxygen's neighbors for Metals
                     nn_of_O = neighbor_dict.get(i, [])
                     for j in nn_of_O:
-                        # j is the Metal.
-                        # If j is a metal AND j is currently listed as my (Carbon's) neighbor...
                         if chem_symb[j] in metals and j in neighbors:
                             to_remove.add(j)
 
-        # --- Metal Logic ---
+        # Metal logic: remove direct Metal-C bond if O mediates
         elif element_k in metals:
             for i in neighbors:
-                # i is the potential Oxygen neighbor
                 if chem_symb[i] == "O":
-                    # Check Oxygen's neighbors for Carbon
                     nn_of_O = neighbor_dict.get(i, [])
                     for j in nn_of_O:
-                        # j is the Carbon.
-                        # If j is a Carbon AND j is currently listed as my (Metal's) neighbor...
                         if chem_symb[j] == "C" and j in neighbors:
                             to_remove.add(j)
 
-        # Apply removals safely
         if to_remove:
             neighbor_dict[k] = [n for n in neighbors if n not in to_remove]
 
     return neighbor_dict
 
 
-# Feature extraction
-def calculate_en_diff(i, atoms, neighbor_dict, ignore_idx=None):
-    """Helper to calculate electronegativity difference."""
+def calculate_en_diff(
+    i: int,
+    atoms,
+    neighbor_dict: dict[int, list[int]],
+    ignore_idx: Optional[int] = None,
+) -> float:
+    """Calculate the sum of electronegativity differences between an atom and its neighbors.
+
+    Parameters
+    ----------
+    i : int
+        Index of the center atom.
+    atoms : ase.Atoms
+        ASE Atoms object.
+    neighbor_dict : dict[int, list[int]]
+        Neighbor dictionary.
+    ignore_idx : int, optional
+        Index of a neighbor to skip.
+
+    Returns
+    -------
+    float
+        Sum of (neighbor_EN - center_EN) for all neighbors.
+    """
     symbols = atoms.get_chemical_symbols()
     center_en = electronegativity[symbols[i]]
 
@@ -154,8 +270,31 @@ def calculate_en_diff(i, atoms, neighbor_dict, ignore_idx=None):
     return sum(diffs)
 
 
-def get_features_wrapper(atoms, pob):
-    """Orchestrates the feature generation pipeline."""
+def get_features_wrapper(atoms, pob) -> Optional[object]:
+    """Generate ML features for all atoms in a structure.
+
+    The 7 features per atom are:
+        1. First ionization potential of center atom
+        2. Electronegativity of center atom
+        3. Mean nearest-neighbor distance
+        4. Mean nearest-neighbor electronegativity
+        5. Mean nearest-neighbor ionization potential
+        6. Mean second-nearest-neighbor electronegativity
+        7. Sum of electronegativity differences with neighbors
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+        ASE Atoms object.
+    pob : pymatgen.core.Structure
+        Pymatgen structure object.
+
+    Returns
+    -------
+    ase.Atoms or None
+        The atoms object with features stored in ``atoms.info["features"]``,
+        or None if featurization failed.
+    """
     cnn = CrystalNN(distance_cutoffs=(0.3, 0.6))
 
     try:
@@ -172,7 +311,7 @@ def get_features_wrapper(atoms, pob):
         if any(len(v) == 0 for v in snn_dict.values()):
             raise ValueError("Missing second nearest neighbors for some atoms.")
 
-        # 5. compute numerical features
+        # 5. Compute numerical features
         chem_symb = atoms.get_chemical_symbols()
         features_atoms = []
 
@@ -198,12 +337,32 @@ def get_features_wrapper(atoms, pob):
         return atoms
 
     except ValueError as e:
-        print(f"Featurization failed: {e}")
+        logger.error("Featurization failed: %s", e)
         return None
 
 
-def adjust_charge(charges, by="mean", net_charge=0):
-    """Vectorized charge adjustment."""
+def adjust_charge(
+    charges: np.ndarray,
+    by: str = "mean",
+    net_charge: float = 0,
+) -> np.ndarray:
+    """Adjust predicted charges to enforce a target net charge.
+
+    Parameters
+    ----------
+    charges : np.ndarray
+        Array of predicted atomic charges.
+    by : str
+        Adjustment method: ``"mean"`` distributes the error equally,
+        ``"magnitude"`` distributes proportional to absolute charge.
+    net_charge : float
+        Target net charge (0 for neutral MOFs).
+
+    Returns
+    -------
+    np.ndarray
+        Adjusted charges summing to ``net_charge``.
+    """
     if by == "magnitude":
         denom = np.sum(np.abs(charges))
         if denom == 0:
@@ -214,9 +373,8 @@ def adjust_charge(charges, by="mean", net_charge=0):
     return charges
 
 
-def write_cif(fileobj, images, charges):
-    """
-    Write atoms and partial charges to a CIF file.
+def write_cif(fileobj, images, charges: list[float]) -> None:
+    """Write atoms and partial charges to a CIF file.
 
     Parameters
     ----------
@@ -224,14 +382,14 @@ def write_cif(fileobj, images, charges):
         Path to the output file or an open file object.
     images : ase.Atoms or list of ase.Atoms
         The atoms to write.
-    charges : list
+    charges : list[float]
         List of partial charges corresponding to the atoms.
     """
     # Ensure images is a list
     if hasattr(images, "get_positions"):
         images = [images]
 
-    # Handle file opening (context manager simulation)
+    # Handle file opening
     if isinstance(fileobj, str):
         f = open(fileobj, "w", encoding="latin-1")
         should_close = True
@@ -304,13 +462,12 @@ def write_cif(fileobj, images, charges):
                         # Set occupancy for the primary atom
                         occupancies[idx] = site_occ.get(original_sym, 1.0)
 
-                        # If other species exist at this tag/site, append them to lists
+                        # If other species exist at this tag/site, append them
                         for sym, occ in site_occ.items():
                             if sym != original_sym:
                                 symbols.append(sym)
                                 coords.append(coords[idx])
                                 occupancies.append(occ)
-                                # Default charge for split sites
                                 if idx < len(charges):
                                     charges.append(charges[idx])
                                 else:
@@ -321,15 +478,15 @@ def write_cif(fileobj, images, charges):
             # 6. Write Data Rows
             symbol_counts = {}
             for idx, (sym, pos, occ) in enumerate(zip(symbols, coords, occupancies)):
-                # Handle charge indexing safely
                 chg = charges[idx] if idx < len(charges) else 0.0
 
-                # Generate Labels (e.g. C1, C2, O1)
                 symbol_counts[sym] = symbol_counts.get(sym, 0) + 1
                 label = f"{sym}{symbol_counts[sym]}"
 
                 f.write(
-                    f"  {label:<8} {occ:6.4f} {pos[0]:7.5f}  {pos[1]:7.5f}  {pos[2]:7.5f}  {'Biso':<4}  {1.0:6.3f}  {sym}  {chg:6.6f}\n"
+                    f"  {label:<8} {occ:6.4f} {pos[0]:7.5f}  {pos[1]:7.5f}"
+                    f"  {pos[2]:7.5f}  {'Biso':<4}  {1.0:6.3f}  {sym}"
+                    f"  {chg:6.6f}\n"
                 )
 
     finally:
@@ -338,17 +495,34 @@ def write_cif(fileobj, images, charges):
 
 
 def process_single_cif(
-    cif_path,
-    output_dir,
-    models,
-    identifier,
-    net_charge_val,
-    adjust_method,
-    print_features,
-):
-    """
-    Process a single CIF file: Read -> Featurize -> Predict -> Write.
-    Returns True if successful, False otherwise.
+    cif_path: str,
+    output_dir: str,
+    models: tuple,
+    identifier: str,
+    net_charge_val: float,
+    adjust_method: str,
+) -> bool:
+    """Process a single CIF file: read, featurize, predict, and write.
+
+    Parameters
+    ----------
+    cif_path : str
+        Path to the input CIF file.
+    output_dir : str
+        Directory to write the output CIF.
+    models : tuple
+        Tuple of (neutral_model, ionic_model).
+    identifier : str
+        Suffix appended to the output filename.
+    net_charge_val : float
+        Net charge of the MOF (0 for neutral).
+    adjust_method : str
+        Charge adjustment method ("mean" or "magnitude").
+
+    Returns
+    -------
+    bool
+        True if processing succeeded, False otherwise.
     """
     neutral_model, ionic_model = models
 
@@ -373,9 +547,8 @@ def process_single_cif(
         # Logic Branch: Neutral vs Ionic
         if net_charge_val == 0:
             final_charges = adjust_charge(raw_charges, by=adjust_method, net_charge=0)
-            feature_suffix = "neutral"
         else:
-            # Prepare features for ionic model (append neutral charge and net_charge density)
+            # Prepare features for ionic model
             natoms = len(atoms)
             net_charge_per_atom = net_charge_val / natoms
 
@@ -390,42 +563,85 @@ def process_single_cif(
             charge_diff = ionic_model.predict(ionic_features)
             ionic_charges = charge_diff + raw_charges
 
-            print(f"Net charge before correction: {np.sum(ionic_charges):.4f}")
+            logger.info("Net charge before correction: %.4f", np.sum(ionic_charges))
             final_charges = adjust_charge(
                 ionic_charges, by=adjust_method, net_charge=net_charge_val
             )
-            print(f"Net charge after correction: {np.sum(final_charges):.4f}")
-            feature_suffix = "ionic"
+            logger.info("Net charge after correction: %.4f", np.sum(final_charges))
+
+        # Ensure output directory exists
+        os.makedirs(output_dir, exist_ok=True)
 
         # Write Output
         base_name = os.path.splitext(os.path.basename(cif_path))[0]
         new_name = f"{base_name}{identifier}.cif"
         output_path = os.path.join(output_dir, new_name)
 
-        print(f"Writing CIF {new_name}")
+        logger.info("Writing CIF %s", new_name)
         write_cif(output_path, atoms, final_charges)
-
-        # Optional: Write CSV
-        if print_features:
-            csv_name = f"features_{feature_suffix}.csv"
 
         return True
 
     except Exception as e:
-        print(f"Failed to process {cif_path}: {e}")
+        logger.error("Failed to process %s: %s", cif_path, e)
         return False
 
 
 def get_charges(
-    path_to_cif,
-    output_path,
-    identifier="_pacmof",
-    multiple_cifs=False,
-    adjust_charge_method="mean",
-    print_features=False,
-    net_charge=0,
-    models_module=None,
-):
+    path_to_cif: str,
+    output_path: str,
+    identifier: str = "_pacmof",
+    multiple_cifs: bool = False,
+    adjust_charge_method: str = "mean",
+    net_charge: Union[int, float, dict] = 0,
+) -> None:
+    """Predict partial atomic charges for one or more MOF CIF files.
+
+    This is the main public API for PACMOF2. It loads the pre-trained
+    models, computes features, predicts charges, and writes output CIF
+    files with ``_atom_site_charge`` annotations.
+
+    Parameters
+    ----------
+    path_to_cif : str
+        Path to a single CIF file, or a directory containing CIF files
+        when ``multiple_cifs=True``.
+    output_path : str
+        Directory where output CIF files will be written.
+    identifier : str
+        Suffix appended to output filenames (default: ``"_pacmof"``).
+    multiple_cifs : bool
+        If True, process all ``.cif`` files in ``path_to_cif`` directory.
+    adjust_charge_method : str
+        Method for enforcing net charge neutrality. Either ``"mean"``
+        (distribute error equally) or ``"magnitude"`` (distribute
+        proportional to absolute charge).
+    net_charge : int, float, or dict
+        Net charge of the MOF. Use 0 for neutral MOFs, a number for a
+        single ionic MOF, or a dict mapping CIF filenames to net charges
+        for batch ionic processing.
+
+    Examples
+    --------
+    Neutral MOF (single file):
+
+    >>> from pacmof2 import get_charges
+    >>> get_charges("my_mof.cif", "output/")
+
+    Ionic MOFs (batch with JSON-loaded dict):
+
+    >>> import json
+    >>> with open("net_charges.json") as f:
+    ...     charges = json.load(f)
+    >>> get_charges("cifs/", "output/", multiple_cifs=True, net_charge=charges)
+    """
+    # Configure logging for CLI/interactive use
+    if not logging.getLogger().handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(message)s",
+        )
+
     # 1. Setup File List
     if multiple_cifs:
         cifs = sorted(glob.glob(os.path.join(path_to_cif, "*.cif")))
@@ -433,19 +649,17 @@ def get_charges(
         cifs = [path_to_cif]
 
     # 2. Load Models Once
-    print("Loading Models...")
-    # Assuming 'models' is the imported module
+    logger.info("Loading Models...")
     neutral_model, ionic_model = load_models()
     loaded_models = (neutral_model, ionic_model)
 
     # 3. Process Loop
-    for cif in tqdm(cifs, desc="Processing CIFs"):
+    for cif in tqdm(cifs, desc="Processing CIFs", disable=len(cifs) <= 1):
         # Determine net charge for this specific file
-        current_net_charge = 0
+        current_net_charge: float = 0
         if isinstance(net_charge, dict):
-            # Key lookup based on filename
             fname = os.path.basename(cif)
-            current_net_charge = net_charge.get(fname, 0)  # Default to 0 if missing?
+            current_net_charge = net_charge.get(fname, 0)
         else:
             current_net_charge = net_charge
 
@@ -456,5 +670,4 @@ def get_charges(
             identifier,
             current_net_charge,
             adjust_charge_method,
-            print_features,
         )
