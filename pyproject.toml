@@ -13,6 +13,7 @@ dependencies = [
     "pymatgen>=2023.10.4",
     "scikit-learn==1.3.2",
     "tqdm>=4.15",
+    "huggingface-hub>=0.20",
 ]
 description = "Predicting partial atomic charges in Metal-Organic Frameworks with DFT-level accuracy"
 readme = "README.md"
@@ -25,6 +26,7 @@ classifiers = [
 
 [project.scripts]
 pacmof2 = "pacmof2.cli:main"
+pacmof2-download-models = "pacmof2.cli:download_models_main"
 
 [tool.setuptools]
 include-package-data = true

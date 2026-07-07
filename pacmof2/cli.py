@@ -142,5 +142,46 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def download_models_main(argv: list[str] | None = None) -> int:
+    """Command-line entry point for prefetching PACMOF2 models."""
+    parser = argparse.ArgumentParser(
+        prog="pacmof2-download-models",
+        description="Download PACMOF2 model files into the Hugging Face cache.",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        default=None,
+        help=(
+            "Optional Hugging Face cache directory. If omitted, the default "
+            "huggingface_hub cache is used."
+        ),
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="Re-download model files even if local files or cached files exist.",
+    )
+
+    args = parser.parse_args(argv)
+
+    from pacmof2.pacmof2 import download_models
+
+    try:
+        model_paths = download_models(
+            cache_dir=args.cache_dir,
+            force_download=args.force,
+        )
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+    print("PACMOF2 models are available:")
+    for filename, path in model_paths.items():
+        print(f"  {filename}: {path}")
+
+    return 0
+
+
 if __name__ == "__main__":
     sys.exit(main())

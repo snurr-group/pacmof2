@@ -4,6 +4,7 @@ import glob
 import logging
 import os
 from importlib.resources import files
+from pathlib import Path
 from typing import Optional, Union
 
 import joblib
@@ -19,6 +20,97 @@ from . import models
 
 logger = logging.getLogger(__name__)
 
+MODEL_REPO_ID = "tdphamm/PACMOF2"
+MODEL_FILENAMES = ("PACMOF2_neutral.gz", "PACMOF2_ionic.gz")
+DEFAULT_MODEL_REVISION = "main"
+
+
+def _model_revision() -> str:
+    """Return the Hugging Face revision used for model downloads."""
+    return os.environ.get("PACMOF2_MODEL_REVISION", DEFAULT_MODEL_REVISION)
+
+
+def _local_model_path(filename: str):
+    """Return a local model path if the model is bundled or manually installed."""
+    model_dir = os.environ.get("PACMOF2_MODEL_DIR")
+    if model_dir:
+        candidate = Path(model_dir) / filename
+        if candidate.is_file():
+            return candidate
+
+    package_model = files(models) / filename
+    if package_model.is_file():
+        return package_model
+
+    return None
+
+
+def _download_model(
+    filename: str,
+    cache_dir: Optional[str] = None,
+    force_download: bool = False,
+) -> str:
+    """Download a model artifact from Hugging Face and return its local path."""
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError as exc:
+        raise RuntimeError(
+            "PACMOF2 models are not installed locally and huggingface-hub is "
+            "not available. Install pacmof2 with current dependencies or run "
+            "`pip install huggingface-hub`."
+        ) from exc
+
+    logger.info("Downloading %s from Hugging Face repo %s...", filename, MODEL_REPO_ID)
+    cache_dir = cache_dir or os.environ.get("PACMOF2_HF_CACHE_DIR")
+    return hf_hub_download(
+        repo_id=MODEL_REPO_ID,
+        filename=filename,
+        revision=_model_revision(),
+        cache_dir=cache_dir,
+        force_download=force_download,
+    )
+
+
+def resolve_model_path(
+    filename: str,
+    cache_dir: Optional[str] = None,
+    force_download: bool = False,
+):
+    """Resolve a model path from local files or the Hugging Face cache."""
+    if filename not in MODEL_FILENAMES:
+        raise ValueError(f"Unknown PACMOF2 model filename: {filename}")
+
+    if not force_download:
+        local_path = _local_model_path(filename)
+        if local_path is not None:
+            return local_path
+
+    return _download_model(
+        filename,
+        cache_dir=cache_dir,
+        force_download=force_download,
+    )
+
+
+def download_models(
+    cache_dir: Optional[str] = None,
+    force_download: bool = False,
+) -> dict[str, object]:
+    """Ensure both PACMOF2 models are available locally.
+
+    Models bundled with the package or placed in ``PACMOF2_MODEL_DIR`` are used
+    first. Missing models are downloaded from Hugging Face and cached by
+    ``huggingface_hub``.
+    """
+    return {
+        filename: resolve_model_path(
+            filename,
+            cache_dir=cache_dir,
+            force_download=force_download,
+        )
+        for filename in MODEL_FILENAMES
+    }
+
 
 def load_models() -> tuple:
     """Load the pre-trained neutral and ionic charge prediction models.
@@ -28,8 +120,9 @@ def load_models() -> tuple:
     tuple
         A tuple of (neutral_model, ionic_model) scikit-learn estimators.
     """
-    neutral_path = files(models) / "PACMOF2_neutral.gz"
-    ionic_path = files(models) / "PACMOF2_ionic.gz"
+    model_paths = download_models()
+    neutral_path = model_paths["PACMOF2_neutral.gz"]
+    ionic_path = model_paths["PACMOF2_ionic.gz"]
 
     neutral_model = joblib.load(neutral_path)
     ionic_model = joblib.load(ionic_path)

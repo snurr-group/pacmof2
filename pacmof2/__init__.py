@@ -11,6 +11,6 @@ try:
 except PackageNotFoundError:
     __version__ = "1.0.0"
 
-from pacmof2.pacmof2 import get_charges
+from pacmof2.pacmof2 import download_models, get_charges
 
-__all__ = ["get_charges", "__version__"]
+__all__ = ["download_models", "get_charges", "__version__"]
