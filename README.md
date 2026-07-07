@@ -10,6 +10,7 @@ PACMOF2 has been tested with Python 3.9 and requires the following dependencies.
 - Pymatgen (2023.10.4)
 - Atomic Simulation Environment (ASE) (3.22.1)
 - Scikit-Learn (1.3.2)
+- huggingface-hub
 
 First, clone the repository:
 ```bash
@@ -24,6 +25,7 @@ conda activate pacmof2
 conda install -c conda-forge pymatgen=2023.10.4
 conda install -c conda-forge ase=3.22.1
 conda install -c conda-forge scikit-learn=1.3.2
+pip install huggingface-hub
 pip install build
 ```
 
@@ -34,27 +36,39 @@ Alternatively, install dependencies via pip:
 pip install -r requirements.txt
 ```
 
-### Downloading the Models
-PACMOF2 models are available on HuggingFace and Zenodo. Download the models and store them under pacmof2/models/ directory:
-
-```bash
-wget -P pacmof2/models/ https://huggingface.co/tdphamm/PACMOF2/resolve/main/PACMOF2_ionic.gz
-wget -P pacmof2/models/ https://huggingface.co/tdphamm/PACMOF2/resolve/main/PACMOF2_neutral.gz
-```
-OR
-
-```bash
-# From Zenodo
-wget -P pacmof2/models/ https://zenodo.org/records/12747095/files/PACMOF2_ionic.gz
-wget -P pacmof2/models/ https://zenodo.org/records/12747095/files/PACMOF2_neutral.gz
-```
-
-
 ### Installing PACMOF2
-After setting up the dependencies and downloading the models, install PACMOF2:
+After setting up the dependencies, install PACMOF2:
 
 ```bash
 pip install -e .
+```
+
+### Downloading the Models
+PACMOF2 models are available on Hugging Face and Zenodo. The package downloads
+the Hugging Face model files automatically the first time predictions are run,
+then reuses the local Hugging Face cache on later runs.
+
+To prefetch the models during setup, run:
+
+```bash
+pacmof2-download-models
+```
+
+For a custom Hugging Face cache location, set `PACMOF2_HF_CACHE_DIR` so both
+prefetching and later predictions use the same cache:
+
+```bash
+export PACMOF2_HF_CACHE_DIR=/path/to/cache
+pacmof2-download-models
+```
+
+For offline or manually managed installs, place both files in a directory and
+set `PACMOF2_MODEL_DIR` to that directory:
+
+```bash
+wget -P /path/to/pacmof2-models/ https://huggingface.co/tdphamm/PACMOF2/resolve/main/PACMOF2_ionic.gz
+wget -P /path/to/pacmof2-models/ https://huggingface.co/tdphamm/PACMOF2/resolve/main/PACMOF2_neutral.gz
+export PACMOF2_MODEL_DIR=/path/to/pacmof2-models
 ```
 
 ## Usage
